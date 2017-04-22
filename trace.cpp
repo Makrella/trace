@@ -82,11 +82,25 @@ int main(int argc, char *argv[]) {
     }
 
 
-    char buf[255];
+    char cbuf[512];
+
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+
+    struct sockaddr_storage target;
+
+    msg.msg_name = &target; //tu sa uloží cieľ správy, teda adresa nášho stroja
+    msg.msg_namelen = sizeof(target); //obvious
+    msg.msg_iov = NULL; //ICMP hlavičku reálne nepríjmeme - stačia controll správy
+    msg.msg_iovlen = 0; //veľkosť štruktúry pre hlavičky - žiadna
+    msg.msg_flags = 0; //žiadne flagy
+    msg.msg_control = cbuf; //predpokladám že buffer pre control správy
+    msg.msg_controllen = sizeof(cbuf);
+
     const short int port = 33434;
     const char * ip_address = address.c_str();
 
-    int sent_socket, recv_socket, retval;
+    int sent_socket, rets, retval;
     struct addrinfo hints, *ret_addrinfo;
 
     memset(&hints, 0, sizeof hints);
@@ -98,31 +112,28 @@ int main(int argc, char *argv[]) {
     timeout.tv_usec = 0;
 
     fd_set FDS;
-    FD_ZERO(&FDS);
-    FD_SET(recv_socket, &FDS);
+
 
     if ((retval = getaddrinfo(ip_address, "33434", &hints, &ret_addrinfo)) != 0) {
         cerr << "getaddrinfo: "<< gai_strerror(retval) <<endl;
         return ERR_ADDRINFO;
     }
 
-    sockaddr_in6 addrSend;
+    sockaddr_in addrSend;
 
     if (ret_addrinfo->ai_family == AF_INET6) {
         if((sent_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_UDP)) == 0) {
             return ERR_SOCKET;
         }
 
-        if((recv_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_ICMP)) == 0) {
-            return ERR_SOCKET;
-        }
+
 
         sockaddr_in6 addrSend;
 
         memset(&addrSend, 0, sizeof(sockaddr_in));
         memcpy(&addrSend, ret_addrinfo->ai_addr, ret_addrinfo->ai_addrlen);
 
-        addrSend.sin6_family = AF_INET;
+        addrSend.sin6_family = AF_INET6;
         addrSend.sin6_port = htons(port);
     }
 
@@ -130,9 +141,7 @@ int main(int argc, char *argv[]) {
         if((sent_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_UDP)) == 0) {
             return ERR_SOCKET;
         }
-        if((recv_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_ICMPV6)) == 0) {
-            return ERR_SOCKET;
-        }
+
 
         sockaddr_in addrSend;
 
@@ -142,6 +151,11 @@ int main(int argc, char *argv[]) {
         addrSend.sin_family = AF_INET;
         addrSend.sin_port = htons(port);
     }
+
+
+
+    const char* messg = "Smajdova mankaa";
+    size_t msg_length = strlen(messg);
 
     int optval = 1;
     if (ret_addrinfo->ai_family == AF_INET) {
@@ -154,36 +168,55 @@ int main(int argc, char *argv[]) {
         }
     }
 
-
-
-    const char* msg = "Smajdova mankaa";
-    size_t msg_length = strlen(msg);
+    if(connect(sent_socket, ret_addrinfo->ai_addr, ret_addrinfo->ai_addrlen) == -1){
+        cout<<"SHIEEET"<<endl;
+        exit(7);
+    }
 
 
     /*if ((bind(sent_socket, (sockaddr*)&addrSend, sizeof(addrSend))) == -1)
         return 47;*/
-    retval = sendto(sent_socket, msg, msg_length, 0, (sockaddr*)&addrSend, sizeof(addrSend));
-    cout<<retval<<endl;
-    char *recv_buffer = (char *)calloc(IP_MAXPACKET, 1);
+    for (int i = first_ttl; i <= max_ttl; i++) {
 
-    while (1) {
-        retval = select(sizeof(FDS), &FDS, NULL, NULL, &timeout);
+        FD_ZERO(&FDS);
+        FD_SET(sent_socket, &FDS);
 
-        if (retval == -1) {
-            return 50;
-        } else if (retval >= 1) {
-            cout<<"Daco doslo"<<endl;
-            if((retval = recvfrom(recv_socket, recv_buffer, IP_MAXPACKET, 0, NULL, NULL)) == -1) {
-                cout<<"rekt"<<endl;
-                exit(5);
+        setsockopt(sent_socket, IPPROTO_IP, IP_TTL, &i, sizeof(i));
+
+
+        retval = (int) sendto(sent_socket, messg, msg_length, 0, ret_addrinfo->ai_addr, ret_addrinfo->ai_addrlen);
+        cout << retval << ": send to OK"<<endl;
+
+
+        while (1) {
+            retval = select(sizeof(FDS), &FDS, NULL, NULL, &timeout);
+            cout << i << ": iteracia" << endl;
+            cout << retval << ": Select" << endl;
+            if (retval == -1) {
+                return 50;
+            }  else if (retval == 0) {
+                cout << "Timeout" << endl <<"----------------------------------"<<endl;
+                break;
+            } else if (retval >= 1) {
+                cout << "Daco doslo" << endl<<endl;
+                /*if ((retval = recvmsg(sent_socket, &msg, MSG_ERRQUEUE)) == -1) {
+                    cout << "rekt" << i << endl;
+                    exit(5);
+                }*/
+                rets = recvmsg(sent_socket, &msg, MSG_ERRQUEUE);
+                cout << "rets: "<< rets << endl;
+                if(rets < 0)
+                {
+                    cout<<"error prijimania"<<endl;
+                    exit(10);
+                }
+                cout<<"not kek"<<endl;
+                
+
             }
-        } else if (retval == 0) {
-            cout<<"Timeout"<<endl;
-            exit(6);
+
         }
-
     }
-
 
     cout<<first_ttl<<endl<<max_ttl<<endl<<address<<endl;
 }
