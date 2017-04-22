@@ -1,19 +1,15 @@
 #include <unistd.h>
-#include <stdlib.h>
-#include <getopt.h>
 #include <iostream>
-#include <string>
-#include <vector>
-#include <ctime>
-#include <cstdlib>
-#include <iomanip>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <arpa/inet.h>
-#include <netinet/ip_icmp.h>
-#include <linux/errqueue.h>
 #include <cstring>
+#include <arpa/inet.h>
+#include <netinet/ip6.h>
+#include <netinet/icmp6.h>
+#include <netinet/ip_icmp.h>
+
+#define ERR_SOCKET      45
+#define ERR_ADDRINFO    46
 
 using namespace std;
 
@@ -84,37 +80,110 @@ int main(int argc, char *argv[]) {
         help();
         return EXIT_FAILURE;
     }
-    short int port = 33434;
+
+
+    char buf[255];
+    const short int port = 33434;
     const char * ip_address = address.c_str();
-    int socks, recvs, rv;
-    struct addrinfo hints,
-                    *ret;
+
+    int sent_socket, recv_socket, retval;
+    struct addrinfo hints, *ret_addrinfo;
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
 
-    socks = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    struct timeval timeout;
+    timeout.tv_sec = 2;
+    timeout.tv_usec = 0;
 
-    if (getaddrinfo(ip_address, "33434", &hints, &ret)) {
-        cerr << "getaddrinfo: "<< gai_strerror(rv) <<endl;
-        exit(420);
+    fd_set FDS;
+    FD_ZERO(&FDS);
+    FD_SET(recv_socket, &FDS);
+
+    if ((retval = getaddrinfo(ip_address, "33434", &hints, &ret_addrinfo)) != 0) {
+        cerr << "getaddrinfo: "<< gai_strerror(retval) <<endl;
+        return ERR_ADDRINFO;
     }
 
-    sockaddr_in addrListen;
+    sockaddr_in6 addrSend;
 
-    memset(&addrListen, 0, sizeof(sockaddr_in));
-    memcpy(&addrListen, ret->ai_addr, ret->ai_addrlen);
+    if (ret_addrinfo->ai_family == AF_INET6) {
+        if((sent_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_UDP)) == 0) {
+            return ERR_SOCKET;
+        }
 
-    addrListen.sin_family = AF_INET;
-    addrListen.sin_port = htons(port);
+        if((recv_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_ICMP)) == 0) {
+            return ERR_SOCKET;
+        }
+
+        sockaddr_in6 addrSend;
+
+        memset(&addrSend, 0, sizeof(sockaddr_in));
+        memcpy(&addrSend, ret_addrinfo->ai_addr, ret_addrinfo->ai_addrlen);
+
+        addrSend.sin6_family = AF_INET;
+        addrSend.sin6_port = htons(port);
+    }
+
+    else {
+        if((sent_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_UDP)) == 0) {
+            return ERR_SOCKET;
+        }
+        if((recv_socket = socket(ret_addrinfo->ai_family, ret_addrinfo->ai_socktype, IPPROTO_ICMPV6)) == 0) {
+            return ERR_SOCKET;
+        }
+
+        sockaddr_in addrSend;
+
+        memset(&addrSend, 0, sizeof(sockaddr_in));
+        memcpy(&addrSend, ret_addrinfo->ai_addr, ret_addrinfo->ai_addrlen);
+
+        addrSend.sin_family = AF_INET;
+        addrSend.sin_port = htons(port);
+    }
+
+    int optval = 1;
+    if (ret_addrinfo->ai_family == AF_INET) {
+        if ((setsockopt(sent_socket, SOL_IP, IP_RECVERR, (char*)&optval, sizeof(optval)))) {
+            printf("Error setting IPV4_RECVERR\n");
+        }
+    } else if (ret_addrinfo->ai_family == AF_INET6) {
+        if ((setsockopt(sent_socket, SOL_IPV6, IPV6_RECVERR, (char*)&optval, sizeof(optval)))) {
+            printf("Error setting IPV6_RECVERR\n");
+        }
+    }
+
 
 
     const char* msg = "Smajdova mankaa";
     size_t msg_length = strlen(msg);
 
-    rv = sendto(socks, msg, msg_length, 0, (sockaddr*)&addrListen, sizeof(addrListen));
-    cout<<rv<<endl;
+
+    /*if ((bind(sent_socket, (sockaddr*)&addrSend, sizeof(addrSend))) == -1)
+        return 47;*/
+    retval = sendto(sent_socket, msg, msg_length, 0, (sockaddr*)&addrSend, sizeof(addrSend));
+    cout<<retval<<endl;
+    char *recv_buffer = (char *)calloc(IP_MAXPACKET, 1);
+
+    while (1) {
+        retval = select(sizeof(FDS), &FDS, NULL, NULL, &timeout);
+
+        if (retval == -1) {
+            return 50;
+        } else if (retval >= 1) {
+            cout<<"Daco doslo"<<endl;
+            if((retval = recvfrom(recv_socket, recv_buffer, IP_MAXPACKET, 0, NULL, NULL)) == -1) {
+                cout<<"rekt"<<endl;
+                exit(5);
+            }
+        } else if (retval == 0) {
+            cout<<"Timeout"<<endl;
+            exit(6);
+        }
+
+    }
+
 
     cout<<first_ttl<<endl<<max_ttl<<endl<<address<<endl;
 }
