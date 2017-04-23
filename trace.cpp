@@ -1,10 +1,19 @@
+/*
+ *
+ * IPK PROJECT 2.
+ * BUT FIT 2016/2017
+ * DOMINIK DRDAK xdrdak01
+ *
+ *
+ */
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <iostream>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <cstring>
 #include <arpa/inet.h>
 #include <netinet/icmp6.h>
 #include <linux/errqueue.h>
@@ -86,6 +95,11 @@ int parser(int argc, char *argv[]) {
     return 0;
 }
 
+void freeMess(int sent_soc, addrinfo *results) {
+    close(sent_soc);
+    freeaddrinfo(results);
+}
+
 
 int main(int argc, char *argv[]) {
 
@@ -121,14 +135,18 @@ int main(int argc, char *argv[]) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
 
+
     //getaddrinfo function, no explanation needed
     if((return_value = getaddrinfo(address.c_str(), "33434", &hints, &results)) != 0) {
         cerr << "getaddrinfo - "<< address << ": " << gai_strerror(return_value) <<endl;
         return ERR_GETADDRINFO;
     }
 
+
+
     //setting up socket with information from getaddrinfo
     if((sent_soc = socket(results->ai_family, results->ai_socktype, IPPROTO_UDP)) == 0) {
+        freeMess(sent_soc, results);
         return ERR_SETSNDSOCK;
     }
 
@@ -137,11 +155,13 @@ int main(int argc, char *argv[]) {
     if (results->ai_family == AF_INET) {
         if ((setsockopt(sent_soc, SOL_IP, IP_RECVERR, (char*)&optval, sizeof(optval)))) {
             printf("Error setting IPV4_RECVERR\n");
+            freeMess(sent_soc, results);
             return ERR_SETSOCKRECVERR;
         }
     } else if (results->ai_family == AF_INET6) {
         if ((setsockopt(sent_soc, SOL_IPV6, IPV6_RECVERR, (char*)&optval, sizeof(optval)))) {
             printf("Error setting IPV6_RECVERR\n");
+            freeMess(sent_soc, results);
             return ERR_SETSOCKRECVERR;
         }
     }
@@ -179,6 +199,7 @@ int main(int argc, char *argv[]) {
         //sendto function, if send fails, ERR_SENDTO
         return_value = (int)sendto(sent_soc, socket_msg, msg_length, 0, results->ai_addr, results->ai_addrlen);
         if(return_value <= 0){
+            freeMess(sent_soc, results);
             return ERR_SENDTO;
         }
 
@@ -195,6 +216,7 @@ int main(int argc, char *argv[]) {
         return_value = select(FD_SETSIZE, &FDS, NULL, NULL, &timeout);
         if(return_value == -1) {
             cout<<"SELECT ERROR"<<endl;
+            freeMess(sent_soc, results);
             return ERR_SLCTERR;
 
         //timeout
@@ -224,8 +246,10 @@ int main(int argc, char *argv[]) {
 
             //receiving message
             return_value = (int)recvmsg(sent_soc, &msg, MSG_ERRQUEUE);
-            if(return_value == -1)
+            if(return_value == -1) {
+                freeMess(sent_soc, results);
                 return ERR_RECV;
+            }
 
             for (cmsg = CMSG_FIRSTHDR(&msg); cmsg ; cmsg = CMSG_NXTHDR(&msg, cmsg))
             {
@@ -233,59 +257,68 @@ int main(int argc, char *argv[]) {
                 if ((cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) || (cmsg->cmsg_level == SOL_IPV6 && cmsg->cmsg_type == IPV6_RECVERR))
                 {
                     //getting data from header
-                    struct sock_extended_err *e = (struct sock_extended_err*) CMSG_DATA(cmsg);
+                    struct sock_extended_err *error = (struct sock_extended_err*) CMSG_DATA(cmsg);
 
                     //magic
-                    if (e && e->ee_origin == SO_EE_ORIGIN_ICMP) {
+                    if (error && error->ee_origin == SO_EE_ORIGIN_ICMP) {
 
                         //getting the address
-                        struct sockaddr_in *sin = (struct sockaddr_in *)(e+1);
+                        struct sockaddr_in *foo = (struct sockaddr_in *)(error + 1);
 
                         //time of message receive
                         gettimeofday(&time, NULL);
                         time_recv = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
 
-                        struct sockaddr *aa = (struct sockaddr *)sin;
+                        //additional structure for domain name
+                        struct sockaddr *host = (struct sockaddr *)foo;
                         //total time difference of sent and received
                         total = time_recv - time_sent;
-                        if (e->ee_type == ICMP_DEST_UNREACH) {
-                            switch (e->ee_code) {
-                                case ICMP_HOST_UNREACH:
+                        if (error->ee_type == ICMP_DEST_UNREACH) {//if destination is unreachable
+                            switch (error->ee_code) {
+                                case ICMP_HOST_UNREACH://unreachable host
                                     printf("%2d\t\tH!\n", i);
+                                    freeMess(sent_soc, results);
                                     return HOST_UNREACH;
-                                case ICMP_NET_UNREACH:
+                                case ICMP_NET_UNREACH://network unreachable
                                     printf("%2d\t\tN!\n", i);
+                                    freeMess(sent_soc, results);
                                     return NET_UNREACH;
-                                case ICMP_PROT_UNREACH:
+                                case ICMP_PROT_UNREACH://unreachable protocol
                                     printf("%2d\t\tP!\n", i);
+                                    freeMess(sent_soc, results);
                                     return PROT_UNREACH;
-                                case ICMP_PKT_FILTERED:
+                                case ICMP_PKT_FILTERED://packet filtered?
                                     printf("%2d\t\tX!\n", i);
+                                    freeMess(sent_soc, results);
                                     return PKT_FILTERED;
-                                case ICMP_PORT_UNREACH:
-                                    	//pomocna struktura
+                                case ICMP_PORT_UNREACH://port unreachable = finish, because port 33434 shouldnt be open
+
+                                    //printing out domain name and ip and time
                                     char hostname [NI_MAXHOST];
-                                    getnameinfo(aa, INET_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
-                                    char r_addr[INET_ADDRSTRLEN];
-                                    inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
-                                    printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
+                                    getnameinfo(host, INET_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0);
+                                    char addr[INET_ADDRSTRLEN];
+                                    inet_ntop(PF_INET, &foo->sin_addr, addr, INET_ADDRSTRLEN);
+                                    printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, addr, total);
+                                    freeMess(sent_soc, results);
+
+                                    //programm ends
                                     return 0;
                                 default: break;
                             }
 
-                        } else if (e->ee_type == ICMP_TIME_EXCEEDED) {
+                        } else if (error->ee_type == ICMP_TIME_EXCEEDED) {//when TTL is 0 - increment ttl and next cycle
 
 
                             char hostname [NI_MAXHOST];
-                            getnameinfo(aa, INET_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
-                            char r_addr[INET_ADDRSTRLEN];
-                            inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
-                            printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
+                            getnameinfo(host, INET_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0);
+                            char addr[INET_ADDRSTRLEN];
+                            inet_ntop(PF_INET, &foo->sin_addr, addr, INET_ADDRSTRLEN);
+                            printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, addr, total);
 
 
                         }
 
-                    } else if (e && e->ee_origin == SO_EE_ORIGIN_ICMP6) {
+                    } else if (error && error->ee_origin == SO_EE_ORIGIN_ICMP6) {
 
                         /*same as above...
                          *
@@ -293,49 +326,54 @@ int main(int argc, char *argv[]) {
                          * BUT IN IPv6!!!!!
                          * *literally shaking in anticipation*
                          */
-                        struct sockaddr_in6 *sin = (struct sockaddr_in6 *)(e+1);
+                        struct sockaddr_in6 *foo = (struct sockaddr_in6 *)(error + 1);
 
 
                         gettimeofday(&time, NULL);
                         time_recv = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
                         total = time_recv - time_sent;
 
-                        struct sockaddr *aa = (struct sockaddr *)sin;
+                        struct sockaddr *host = (struct sockaddr *)foo;
 
-                        if (e->ee_type == ICMP6_DST_UNREACH) {
+                        if (error->ee_type == ICMP6_DST_UNREACH) {
 
-                            switch (e->ee_code) {
+                            switch (error->ee_code) {
                                 case ICMP6_DST_UNREACH_ADDR:
                                     printf("%2d\t\tH!\n", i);
+                                    freeMess(sent_soc, results);
                                     return HOST_UNREACH;
                                 case ICMP6_DST_UNREACH_NOROUTE:
                                     printf("%2d\t\tN!\n", i);
+                                    freeMess(sent_soc, results);
                                     return NET_UNREACH;
                                 case 7:
                                     printf("%2d\t\tP!\n", i);
+                                    freeMess(sent_soc, results);
                                     return PROT_UNREACH;
                                 case ICMP6_DST_UNREACH_ADMIN:
                                     printf("%2d\t\tX!\n", i);
+                                    freeMess(sent_soc, results);
                                     return PKT_FILTERED;
                                 case ICMP6_DST_UNREACH_NOPORT:
 
                                     char hostname [NI_MAXHOST];
-                                    getnameinfo(aa, INET6_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
-                                    char r_addr[INET6_ADDRSTRLEN];
-                                    inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
-                                    printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
+                                    getnameinfo(host, INET6_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0);
+                                    char addr[INET6_ADDRSTRLEN];
+                                    inet_ntop(AF_INET6, &foo->sin6_addr, addr, INET6_ADDRSTRLEN);
+                                    printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, addr, total);
+                                    freeMess(sent_soc, results);
                                     return 0;
                                 default:
                                     break;
                             }
 
-                        } else if (e->ee_type == ICMP6_TIME_EXCEEDED) {
+                        } else if (error->ee_type == ICMP6_TIME_EXCEEDED) {
 
                             char hostname [NI_MAXHOST];
-                            getnameinfo(aa, INET6_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
-                            char r_addr[INET6_ADDRSTRLEN];
-                            inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
-                            printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
+                            getnameinfo(host, INET6_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0);
+                            char addr[INET6_ADDRSTRLEN];
+                            inet_ntop(AF_INET6, &foo->sin6_addr, addr, INET6_ADDRSTRLEN);
+                            printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, addr, total);
 
 
                         }
@@ -344,6 +382,8 @@ int main(int argc, char *argv[]) {
             }
         }
     }
+    freeMess(sent_soc, results);
+
     //some cool debug code
     //do not delete
     //cout<<first_ttl<<endl<<max_ttl<<endl<<address<<endl;
