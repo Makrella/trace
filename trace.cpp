@@ -103,7 +103,8 @@ int main(int argc, char *argv[]) {
     timeout.tv_sec = 2;
     timeout.tv_usec = 0;
 
-    int sent_soc, retval;
+    //variable for socket
+    int sent_soc;
     struct addrinfo hints;
     struct addrinfo* results;
 
