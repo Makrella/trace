@@ -104,7 +104,7 @@ int main(int argc, char *argv[]) {
     timeout.tv_usec = 0;
 
     //variable for socket
-    int sent_soc;
+    int sent_soc, retval;
     struct addrinfo hints;
     struct addrinfo* results;
 
