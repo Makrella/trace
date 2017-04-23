@@ -109,11 +109,7 @@ int main(int argc, char *argv[]) {
     timeval time;
     double time_sent, time_recv, total;
 
-    //structure to measure timeout
-    struct timeval timeout;
-    timeout.tv_sec = 2;
-    timeout.tv_usec = 0;
-
+    
     //variable for socket
     int sent_soc;
 
@@ -153,6 +149,11 @@ int main(int argc, char *argv[]) {
 
     //cycle and increment ttls from first ttl to max ttl
     for (int i = first_ttl; i <= max_ttl ; i++) {
+
+        //structure to measure timeout
+        struct timeval timeout;
+        timeout.tv_sec = 2;
+        timeout.tv_usec = 0;
 
         //set TTL of socket - IPv4 and IPv6 difference
         if (results->ai_family == AF_INET) {
@@ -199,6 +200,7 @@ int main(int argc, char *argv[]) {
         //timeout
         } else if (return_value == 0) {
             cout<<i<<"\t\t*"<<endl;
+            continue;
 
         //Select successful, something received
         } else {
@@ -245,9 +247,7 @@ int main(int argc, char *argv[]) {
 
                         //total time difference of sent and received
                         total = time_recv - time_sent;
-
                         if (e->ee_type == ICMP_DEST_UNREACH) {
-
                             switch (e->ee_code) {
                                 case ICMP_HOST_UNREACH:
                                     printf("%2d\t\tH!\n", i);
@@ -308,11 +308,13 @@ int main(int argc, char *argv[]) {
                                 case ICMP6_DST_UNREACH_ADMIN:
                                     printf("%2d\t\tX!\n", i);
                                     return PKT_FILTERED;
-                                default:
+                                case ICMP6_DST_UNREACH_NOPORT:
                                     char r_addr[INET6_ADDRSTRLEN];
                                     inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
                                     printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
                                     return 0;
+                                default:
+                                    break;
                             }
 
                         } else if (e->ee_type == ICMP6_TIME_EXCEEDED) {
