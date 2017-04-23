@@ -1,10 +1,11 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <iostream>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <cstring>
 #include <arpa/inet.h>
-#include <netinet/ip6.h>
 #include <netinet/icmp6.h>
 #include <linux/errqueue.h>
 #include <linux/icmp.h>
@@ -12,8 +13,18 @@
 
 using namespace std;
 
-#define ERR_IPADDR  5
-#define BAD_IP      6
+//exit codes
+#define ERR_IPADDR              5
+#define ERR_GETADDRINFO         6
+#define ERR_SETSNDSOCK          7
+#define ERR_SETSOCKRECVERR      8
+#define ERR_SENDTO              9
+#define ERR_SLCTERR             10
+#define ERR_RECV                11
+#define HOST_UNREACH            12
+#define NET_UNREACH             13
+#define PROT_UNREACH            14
+#define PKT_FILTERED            15
 
 int first_ttl   = 1;    //default values of first and max ttl
 int max_ttl     = 30;   //in case the arguments are not given
@@ -104,7 +115,9 @@ int main(int argc, char *argv[]) {
     timeout.tv_usec = 0;
 
     //variable for socket
-    int sent_soc, retval;
+    int sent_soc;
+
+    //structures for getaddrinfo function, defining IPv4 or IPv6, type of socket, port,..
     struct addrinfo hints;
     struct addrinfo* results;
 
@@ -112,127 +125,209 @@ int main(int argc, char *argv[]) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
 
-    if((retval = getaddrinfo(address.c_str(), "33434", &hints, &results)) != 0) {
-        cerr << "getaddrinfo: "<< gai_strerror(retval) <<endl;
-        return 80;
+    //getaddrinfo function, no explanation needed
+    if((return_value = getaddrinfo(address.c_str(), "33434", &hints, &results)) != 0) {
+        cerr << "getaddrinfo - "<< address << ": " << gai_strerror(return_value) <<endl;
+        return ERR_GETADDRINFO;
     }
 
+    //setting up socket with information from getaddrinfo
     if((sent_soc = socket(results->ai_family, results->ai_socktype, IPPROTO_UDP)) == 0) {
-        return 81;
+        return ERR_SETSNDSOCK;
     }
 
+    //setting socket to receive errors when receiving messages back, handling of IPv4 and 6 differences
     int optval = 1;
     if (results->ai_family == AF_INET) {
         if ((setsockopt(sent_soc, SOL_IP, IP_RECVERR, (char*)&optval, sizeof(optval)))) {
             printf("Error setting IPV4_RECVERR\n");
+            return ERR_SETSOCKRECVERR;
         }
     } else if (results->ai_family == AF_INET6) {
         if ((setsockopt(sent_soc, SOL_IPV6, IPV6_RECVERR, (char*)&optval, sizeof(optval)))) {
             printf("Error setting IPV6_RECVERR\n");
+            return ERR_SETSOCKRECVERR;
         }
     }
 
+
+    //cycle and increment ttls from first ttl to max ttl
     for (int i = first_ttl; i <= max_ttl ; i++) {
+
+        //set TTL of socket - IPv4 and IPv6 difference
         if (results->ai_family == AF_INET) {
             setsockopt(sent_soc, IPPROTO_IP, IP_TTL, &i, sizeof(i));
         } else {
             setsockopt(sent_soc, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &i, sizeof(i));
         }
 
-        const char *socket_msg = "Smajdova manka";
+        /*short message to be sent with packets
+                  _              _        _
+                 | |            | |      | |
+                 | |_ ___  _ __ | | _____| | __
+                 | __/ _ \| '_ \| |/ / _ \ |/ /
+                 | || (_) | |_) |   <  __/   <
+                  \__\___/| .__/|_|\_\___|_|\_\
+                          | |
+                          |_|
+         */
+
+        const char *socket_msg = "https://www.youtube.com/watch?v=oHg5SJYRHA0";
         size_t msg_length = strlen(socket_msg);
 
-        retval = (int)sendto(sent_soc, socket_msg, msg_length, 0, results->ai_addr, results->ai_addrlen);
+        //sendto function, if send fails, ERR_SENDTO
+        return_value = (int)sendto(sent_soc, socket_msg, msg_length, 0, results->ai_addr, results->ai_addrlen);
+        if(return_value <= 0){
+            return ERR_SENDTO;
+        }
 
+        //get the time when the message was sent
         gettimeofday(&time, NULL);
         time_sent = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
 
+        //set up socket for receiving
         fd_set FDS;
         FD_ZERO(&FDS);
         FD_SET(sent_soc, &FDS);
 
-        retval = select(FD_SETSIZE, &FDS, NULL, NULL, &timeout);
-        if(retval == -1) {
-            cout<<"chyba"<<endl;
+        //select function to wait for answer/ timeout / error
+        return_value = select(FD_SETSIZE, &FDS, NULL, NULL, &timeout);
+        if(return_value == -1) {
+            cout<<"SELECT ERROR"<<endl;
+            return ERR_SLCTERR;
 
-        } else if (retval == 0) {
+        //timeout
+        } else if (return_value == 0) {
             cout<<i<<"\t\t*"<<endl;
 
+        //Select successful, something received
         } else {
-            //cout<<"select uspesny, prijalo sa "<<i<<endl;
 
             char cbuf[512];
-            char host[512]; //buffer pre odpoveď
-            char service[20];
 
-            struct msghdr msg; //prijatá správa - môže obsahovať viac control hlavičiek
+            //structure with received message
+            struct msghdr msg;
             struct cmsghdr *cmsg;
 
-            //štruktúra pre adresu kompatibilná s IPv4 aj v6
+            //structure for address, IPv4 and IPv6 compatible
             struct sockaddr_storage target;
 
-            msg.msg_name = &target; //tu sa uloží cieľ správy, teda adresa nášho stroja
-            msg.msg_namelen = sizeof(target); //obvious
-            msg.msg_iov = NULL; //ICMP hlavičku reálne nepríjmeme - stačia controll správy
-            msg.msg_iovlen = 0; //veľkosť štruktúry pre hlavičky - žiadna
-            msg.msg_flags = 0; //žiadne flagy
-            msg.msg_control = cbuf; //predpokladám že buffer pre control správy
-            msg.msg_controllen = sizeof(cbuf);//obvious
+            msg.msg_name = &target; //address of sender (us)
+            msg.msg_namelen = sizeof(target);
+            msg.msg_iov = NULL; //ICMP header - not needed
+            msg.msg_iovlen = 0;
+            msg.msg_flags = 0; //no flags
+            msg.msg_control = cbuf; //buffer for ctrl messages
+            msg.msg_controllen = sizeof(cbuf);
 
-            retval = (int)recvmsg(sent_soc, &msg, MSG_ERRQUEUE); //prijme správu
+            //receiving message
+            return_value = (int)recvmsg(sent_soc, &msg, MSG_ERRQUEUE);
+            if(return_value == -1)
+                return ERR_RECV;
 
-            for (cmsg = CMSG_FIRSTHDR(&msg);cmsg; cmsg =CMSG_NXTHDR(&msg, cmsg))
+            for (cmsg = CMSG_FIRSTHDR(&msg); cmsg ; cmsg = CMSG_NXTHDR(&msg, cmsg))
             {
-                /* skontrolujeme si pôvod správy - niečo podobné nám bude treba aj pre IPv6 */
-                if (cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR)
+                //controling the origin of message
+                if ((cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) || (cmsg->cmsg_level == SOL_IPV6 && cmsg->cmsg_type == IPV6_RECVERR))
                 {
-                    //získame dáta z hlavičky
+                    //getting data from header
                     struct sock_extended_err *e = (struct sock_extended_err*) CMSG_DATA(cmsg);
 
-                    //bude treba niečo podobné aj pre IPv6 (hint: iný flag)
+                    //magic
                     if (e && e->ee_origin == SO_EE_ORIGIN_ICMP) {
 
-                        /* získame adresu - ak to robíte všeobecne tak sockaddr_storage */
+                        //getting the address
                         struct sockaddr_in *sin = (struct sockaddr_in *)(e+1);
 
-                        /*
-                        * v sin máme zdrojovú adresu
-                        * stačí ju už len vypísať viď: inet_ntop alebo getnameinfo
-                        */
+                        //time of message receive
+                        gettimeofday(&time, NULL);
+                        time_recv = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
+
+                        //total time difference of sent and received
+                        total = time_recv - time_sent;
+
+                        if (e->ee_type == ICMP_DEST_UNREACH) {
+
+                            switch (e->ee_code) {
+                                case ICMP_HOST_UNREACH:
+                                    printf("%2d\t\tH!\n", i);
+                                    return HOST_UNREACH;
+                                case ICMP_NET_UNREACH:
+                                    printf("%2d\t\tN!\n", i);
+                                    return NET_UNREACH;
+                                case ICMP_PROT_UNREACH:
+                                    printf("%2d\t\tP!\n", i);
+                                    return PROT_UNREACH;
+                                case ICMP_PKT_FILTERED:
+                                    printf("%2d\t\tX!\n", i);
+                                    return PKT_FILTERED;
+                                case ICMP_PORT_UNREACH:
+                                    char r_addr[INET_ADDRSTRLEN];
+                                    inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
+                                    printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+                                    return 0;
+                                default: break;
+                            }
+
+                        } else if (e->ee_type == ICMP_TIME_EXCEEDED) {
+                            char r_addr[INET_ADDRSTRLEN];
+                            inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
+                            printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+
+
+                        }
+
+                    } else if (e && e->ee_origin == SO_EE_ORIGIN_ICMP6) {
+
+                        /*same as above...
+                         *
+                         *
+                         * BUT IN IPv6!!!!!
+                         * *literally shaking in anticipation*
+                         */
+                        struct sockaddr_in6 *sin = (struct sockaddr_in6 *)(e+1);
+
+
                         gettimeofday(&time, NULL);
                         time_recv = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
                         total = time_recv - time_sent;
 
-                        char r_addr[INET_ADDRSTRLEN];
-                        inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
-                        printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+
+                        if (e->ee_type == ICMP6_DST_UNREACH) {
+
+                            switch (e->ee_code) {
+                                case ICMP6_DST_UNREACH_ADDR:
+                                    printf("%2d\t\tH!\n", i);
+                                    return HOST_UNREACH;
+                                case ICMP6_DST_UNREACH_NOROUTE:
+                                    printf("%2d\t\tN!\n", i);
+                                    return NET_UNREACH;
+                                case 7:
+                                    printf("%2d\t\tP!\n", i);
+                                    return PROT_UNREACH;
+                                case ICMP6_DST_UNREACH_ADMIN:
+                                    printf("%2d\t\tX!\n", i);
+                                    return PKT_FILTERED;
+                                default:
+                                    char r_addr[INET6_ADDRSTRLEN];
+                                    inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
+                                    printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+                                    return 0;
+                            }
+
+                        } else if (e->ee_type == ICMP6_TIME_EXCEEDED) {
+                            char r_addr[INET6_ADDRSTRLEN];
+                            inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
+                            printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
 
 
-
-                        if (e->ee_type == ICMP_TIME_EXCEEDED) {
-                            break;
-                        } else if (e->ee_type == ICMP_DEST_UNREACH) {
-                            cout<<"ITS TIME TO STOP"<<endl;
-                            return 420;
-                            /*
-                            * Overíme si všetky možné návratové správy
-                            * hlavne ICMP_TIME_EXCEEDED and ICMP_DEST_UNREACH
-                            * v prvom prípade inkrementujeme TTL a pokračujeme
-                            * v druhom prípade sme narazili na cieľ
-                            *
-                            * kódy pre IPv4 nájdete tu
-                            * http://man7.org/linux/man-pages/man7/icmp.7.html
-                            *
-                            * kódy pre IPv6 sú ODLIŠNÉ!:
-                            * nájdete ich napríklad tu https://tools.ietf.org/html/rfc4443
-                            * strana 4
-                            */
                         }
                     }
                 }
             }
         }
     }
-
+    //some cool debug code
+    //do not delete
     //cout<<first_ttl<<endl<<max_ttl<<endl<<address<<endl;
 }
