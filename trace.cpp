@@ -109,7 +109,7 @@ int main(int argc, char *argv[]) {
     timeval time;
     double time_sent, time_recv, total;
 
-    
+
     //variable for socket
     int sent_soc;
 
@@ -245,6 +245,7 @@ int main(int argc, char *argv[]) {
                         gettimeofday(&time, NULL);
                         time_recv = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
 
+                        struct sockaddr *aa = (struct sockaddr *)sin;
                         //total time difference of sent and received
                         total = time_recv - time_sent;
                         if (e->ee_type == ICMP_DEST_UNREACH) {
@@ -262,17 +263,24 @@ int main(int argc, char *argv[]) {
                                     printf("%2d\t\tX!\n", i);
                                     return PKT_FILTERED;
                                 case ICMP_PORT_UNREACH:
+                                    	//pomocna struktura
+                                    char hostname [NI_MAXHOST];
+                                    getnameinfo(aa, INET_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
                                     char r_addr[INET_ADDRSTRLEN];
                                     inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
-                                    printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+                                    printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
                                     return 0;
                                 default: break;
                             }
 
                         } else if (e->ee_type == ICMP_TIME_EXCEEDED) {
+
+
+                            char hostname [NI_MAXHOST];
+                            getnameinfo(aa, INET_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
                             char r_addr[INET_ADDRSTRLEN];
                             inet_ntop(PF_INET, &sin->sin_addr, r_addr, INET_ADDRSTRLEN);
-                            printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+                            printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
 
 
                         }
@@ -292,6 +300,7 @@ int main(int argc, char *argv[]) {
                         time_recv = (time.tv_sec * 1000.0) + (time.tv_usec / 1000.0);
                         total = time_recv - time_sent;
 
+                        struct sockaddr *aa = (struct sockaddr *)sin;
 
                         if (e->ee_type == ICMP6_DST_UNREACH) {
 
@@ -309,18 +318,24 @@ int main(int argc, char *argv[]) {
                                     printf("%2d\t\tX!\n", i);
                                     return PKT_FILTERED;
                                 case ICMP6_DST_UNREACH_NOPORT:
+
+                                    char hostname [NI_MAXHOST];
+                                    getnameinfo(aa, INET6_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
                                     char r_addr[INET6_ADDRSTRLEN];
                                     inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
-                                    printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+                                    printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
                                     return 0;
                                 default:
                                     break;
                             }
 
                         } else if (e->ee_type == ICMP6_TIME_EXCEEDED) {
+
+                            char hostname [NI_MAXHOST];
+                            getnameinfo(aa, INET6_ADDRSTRLEN, hostname, NI_MAXHOST, NULL, 0, 0); //preklad
                             char r_addr[INET6_ADDRSTRLEN];
                             inet_ntop(AF_INET6, &sin->sin6_addr, r_addr, INET6_ADDRSTRLEN);
-                            printf("%2d\t\t%s\t\t%.3f\tms\n", i, r_addr, total);
+                            printf("%2d\t\t%s (%s)\t\t%.3f\tms\n", i, hostname, r_addr, total);
 
 
                         }
